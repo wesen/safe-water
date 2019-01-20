@@ -1,0 +1,175 @@
+---
+title: "SWDIS raw analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(choroplethr)
+library(choroplethrMaps)
+```
+
+# Cleaning up the water systems
+
+Get an overview of the variables.
+
+```{r}
+read_csv("data/swdis/WATER_SYSTEM.csv", n_max=10000) %>%
+  summary()
+```
+
+```{r}
+water_system <- read_csv("data/swdis/WATER_SYSTEM.csv", 
+                         col_types=cols_only(PWSID=col_character(),
+                                             POPULATION_SERVED_COUNT=col_integer(),
+                                             ORG_NAME=col_character(),
+                                             PWS_TYPE_CODE=col_factor(),
+                                             ZIP_CODE=col_character()
+                         ))
+summary(water_system)
+
+head(water_system)
+```
+
+Cleanup some of the data.
+
+```{r}
+clean_water_system <- water_system %>%
+  na.omit() %>%
+  filter(POPULATION_SERVED_COUNT<1000000, POPULATION_SERVED_COUNT>500, PWS_TYPE_CODE=="CWS")
+summary(clean_water_system)
+```
+
+There are still population sized outliers.
+
+Let's look at how many people are served.
+
+```{r}
+clean_water_system %>% 
+  ggplot(aes(x=POPULATION_SERVED_COUNT)) +
+  geom_histogram(bins=100)
+```
+
+Let's trim off the outliers
+```{r}
+clean_water_system %>% 
+  filter(POPULATION_SERVED_COUNT<10000) %>%
+  ggplot(aes(x=POPULATION_SERVED_COUNT)) +
+  geom_histogram(bins=100)
+```
+
+# Cleanup the violations
+
+```{r}
+read_csv("data/swdis/VIOLATION.csv", n_max=10000) %>% head()
+```
+
+We want to look at:
+* CONTAMINANT_CODE
+* PWSID
+* COMPL_PER_BEGIN_DATE
+* COMPL_PER_END_DATE
+
+```{r}
+violations <- read_csv("data/swdis/VIOLATION.csv",
+                       col_types = cols_only(
+  CONTAMINANT_CODE=col_character(),
+  PWSID=col_character(),
+  COMPL_PER_BEGIN_DATE=col_date(format="%d-%b-%y"),
+  COMPL_PER_END_DATE=col_date(format="%d-%b-%y")
+))
+head(violations)
+```
+
+Get the contaminant codes.
+
+```{r}
+contaminant_codes <- read_csv("data/swdis/contaminant-codes.csv") %>%
+  rename(CONTAMINANT_CODE=CODE, CONTAMINANT_NAME=NAME, CONTAMINANT_TYPE_CODE=TYPE_CODE)
+head(contaminant_codes)
+
+contaminant_group_codes <- read_csv("data/swdis/contaminant-group-codes.csv") %>%
+  rename(CONTAMINANT_CODE=`Analyte Code`, CONTAMINANT_NAME=`Analyte Name`, CONTAMINANT_GROUP=`Group Name`, CONTAMINANT_GROUP_CODE=`Group Code`)
+contaminant_group_codes %>% head()
+```
+
+Join this with our cleaned up PWS ids.
+
+```{r}
+clean_violations <- violations %>%
+  inner_join(clean_water_system,  by="PWSID") %>%
+  inner_join(contaminant_group_codes, by="CONTAMINANT_CODE")
+nrow(clean_violations)
+head(clean_violations)
+```
+
+Let's do some count of violation types.
+
+```{r}
+tallied_violations <- clean_violations %>%
+  group_by(CONTAMINANT_NAME) %>%
+  summarize(n=n()) %>%
+  arrange(desc(n))
+
+tallied_violations
+```
+
+```{r}
+clean_violations %>%
+  group_by(CONTAMINANT_GROUP) %>%
+  summarize(n=n()) %>%
+  arrange(desc(n)) %>%
+  head(n=20)
+```
+
+Get FIPS region codes.
+
+```{r}
+data(zip_codes)
+data(counties)
+
+violations_by_region <- clean_violations %>%
+  inner_join(zip_codes, by=c("ZIP_CODE"="zip")) %>%
+  rename(region=fips) %>%
+  group_by(region) %>%
+  summarize(count_violations=n())
+head(violations_by_region)
+```
+
+```{r choropleth_population, hold=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+water_system_fips <- clean_water_system %>%
+  inner_join(zip_codes, by=c("ZIP_CODE"="zip")) %>%
+  rename(region=fips) %>%
+  group_by(region) %>%
+  summarize(total_pop=sum(POPULATION_SERVED_COUNT))
+
+county_choropleth(water_system_fips %>% rename(value=total_pop), state_zoom=c("massachusetts"))
+```
+
+```{r choropleth_population, hold=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+county_choropleth(violations_by_region %>% rename(value=total_pop), state_zoom=c("massachusetts"))
+```
+
+Why are there no violations listed for Boston itself?
+
+
+```{r choropleth_population, hold=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+county_choropleth(violations_by_region %>% rename(value=count_violations), state_zoom=c("massachusetts"))
+```
+
+Why is suffolk county missing? Let's look at the boston zip code.
+
+```{r}
+clean_water_system %>%
+  filter(ZIP_CODE=="02155" | ZIP_CODE=="02122")
+
+water_system %>%
+  filter(ZIP_CODE=="02155" | ZIP_CODE=="02122")
+
+water_system %>%
+  filter(grepl("BOSTON",ORG_NAME))
+```
+
+sdfsdf
